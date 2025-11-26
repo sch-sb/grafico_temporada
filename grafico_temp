@@ -3,7 +3,7 @@ pacman::p_load(tidyverse, lubridate)
 pasta_historica <- "C:/Relatorios DC e Nowcasting/DC e Nowcasting_CSVs/Dengue"
 pasta_atual    <- "C:/Relatorios DC e Nowcasting/DC e Nowcasting_CSVs/Dengue atual"
 
-#Leitura
+# Leitura
 ler_dados_dengue <- function(arquivo, colunas) {
   read_delim(
     arquivo,
@@ -38,6 +38,23 @@ uf_codigos <- c(
   "35" = "São Paulo", "28" = "Sergipe", "17" = "Tocantins"
 )
 
+# Região por UF (código numérico)
+regiao_codigos <- c(
+  # Norte
+  "12" = "Norte", "13" = "Norte", "14" = "Norte", "15" = "Norte",
+  "16" = "Norte", "17" = "Norte", "11" = "Norte",
+  # Nordeste
+  "21" = "Nordeste", "22" = "Nordeste", "23" = "Nordeste", "24" = "Nordeste",
+  "25" = "Nordeste", "26" = "Nordeste", "27" = "Nordeste", "28" = "Nordeste", "29" = "Nordeste",
+  # Sudeste
+  "31" = "Sudeste", "32" = "Sudeste", "33" = "Sudeste", "35" = "Sudeste",
+  # Sul
+  "41" = "Sul", "42" = "Sul", "43" = "Sul",
+  # Centro-Oeste
+  "50" = "Centro-Oeste", "51" = "Centro-Oeste", "52" = "Centro-Oeste", "53" = "Centro-Oeste"
+)
+
+# Processa e define temporadas
 dados <- bind_rows(dados_2023, dados_2024, dados_atuais) %>%
   mutate(
     SEM_PRI = gsub("[^0-9]", "", SEM_PRI),  
@@ -46,17 +63,11 @@ dados <- bind_rows(dados_2023, dados_2024, dados_atuais) %>%
     ano     = sem_num %/% 100,
     semana  = sem_num %% 100
   ) %>%
-  filter(!is.na(ano), !is.na(semana))
-
-dados <- dados %>%
-  filter(!(fonte == "atuais" & ano <= 2024))
-
-# Filtro = casos prováveis
-dados <- dados %>%
-  filter(!CLASSI_FIN %in% c("5", "5.0", "13", "13.0") | is.na(CLASSI_FIN))
-
-# Temporadas
-dados <- dados %>%
+  filter(!is.na(ano), !is.na(semana)) %>%
+  # tira dados atuais de anos anteriores a 2025, se quiser evitar duplicidade com históricos
+  filter(!(fonte == "atuais" & ano <= 2024)) %>%
+  # casos prováveis
+  filter(!CLASSI_FIN %in% c("5", "5.0", "13", "13.0") | is.na(CLASSI_FIN)) %>%
   mutate(
     temporada = case_when(
       (ano == 2023 & semana >= 27) | (ano == 2024 & semana <= 26) ~ "2023/2024",
@@ -65,15 +76,20 @@ dados <- dados %>%
       TRUE ~ NA_character_
     ),
     ordem_se = if_else(semana >= 27, semana - 26, semana + 26),
-    UF_nome  = uf_codigos[as.character(SG_UF)]
+    UF_nome  = uf_codigos[as.character(SG_UF)],
+    regiao   = regiao_codigos[as.character(SG_UF)]
   ) %>%
   filter(!is.na(temporada))
 
-# Agregar
+# Agregar por UF
 dados_agg <- dados %>%
   group_by(temporada, SG_UF, UF_nome, semana, ordem_se) %>%
   summarise(casos = n(), .groups = "drop")
 
+# Agregar por região
+dados_regiao_agg <- dados %>%
+  group_by(temporada, regiao, semana, ordem_se) %>%
+  summarise(casos = n(), .groups = "drop")
 
 # Cores
 cores_temporada <- c(
@@ -82,9 +98,11 @@ cores_temporada <- c(
   "2025/2026" = "red"
 )
 
-# Função de gráfico
-plotar_grafico <- function(df, uf = NULL) {
-  titulo <- if (is.null(uf)) {
+# Função de gráfico (agora com título opcional)
+plotar_grafico <- function(df, uf = NULL, titulo_custom = NULL) {
+  titulo <- if (!is.null(titulo_custom)) {
+    titulo_custom
+  } else if (is.null(uf)) {
     "Brasil"
   } else {
     first(na.omit(df$UF_nome[df$SG_UF == uf]))
@@ -114,15 +132,18 @@ plotar_grafico <- function(df, uf = NULL) {
       y = "Número de Casos",
       color = "Temporada"
     ) +
-    theme_minimal() +                        
     theme(
-      axis.text.x = element_text(angle = 90, hjust = 1, size = 6)
+      panel.grid = element_blank(),        
+      panel.background = element_blank(),  
+      axis.text.x = element_text(angle = 90, hjust = 1, size = 6),
+      axis.line = element_line(color = "black"),
+      axis.ticks = element_line(color = "black")
     )
-  
-} 
+}
 
-# Pasta de saída
-dir.create("graficos_uf", showWarnings = FALSE)
+# Pastas de saída
+dir.create("graficos_uf",      showWarnings = FALSE)
+dir.create("graficos_regiao", showWarnings = FALSE)
 
 # Gráfico Brasil
 grafico_brasil <- dados_agg %>%
@@ -142,4 +163,17 @@ for (uf in ufs) {
   nome_uf <- unique(na.omit(dados_agg$UF_nome[dados_agg$SG_UF == uf]))
   ggsave(filename = file.path("graficos_uf", paste0("grafico_dengue_", nome_uf, ".png")),
          plot = p, width = 12, height = 6)
+}
+
+# 🔹 Gráficos por REGIÃO
+regioes <- unique(dados_regiao_agg$regiao)
+
+for (reg in regioes) {
+  p_reg <- plotar_grafico(
+    df = dados_regiao_agg %>% filter(regiao == reg),
+    titulo_custom = paste("Região", reg)
+  )
+  
+  ggsave(filename = file.path("graficos_regiao", paste0("grafico_dengue_regiao_", reg, ".png")),
+         plot = p_reg, width = 12, height = 6)
 }
