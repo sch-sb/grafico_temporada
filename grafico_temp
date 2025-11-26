@@ -1,0 +1,145 @@
+pacman::p_load(tidyverse, lubridate)
+
+pasta_historica <- "C:/Relatorios DC e Nowcasting/DC e Nowcasting_CSVs/Dengue"
+pasta_atual    <- "C:/Relatorios DC e Nowcasting/DC e Nowcasting_CSVs/Dengue atual"
+
+#Leitura
+ler_dados_dengue <- function(arquivo, colunas) {
+  read_delim(
+    arquivo,
+    delim = ";",
+    escape_double = FALSE,
+    trim_ws = TRUE,
+    col_select = all_of(colunas),
+    col_types = cols(.default = col_character()),
+    show_col_types = FALSE
+  )
+}
+
+colunas_basicas <- c("DT_SIN_PRI", "SEM_PRI", "SG_UF", "CLASSI_FIN")
+
+dados_2023  <- ler_dados_dengue(file.path(pasta_historica, "DENGUE2023.csv"), colunas_basicas) %>%
+  mutate(fonte = "hist_2023")
+
+dados_2024  <- ler_dados_dengue(file.path(pasta_historica, "DENGUE2024.csv"), colunas_basicas) %>%
+  mutate(fonte = "hist_2024")
+
+dados_atuais <- ler_dados_dengue(file.path(pasta_atual,      "DENGUE.csv"),   colunas_basicas) %>%
+  mutate(fonte = "atuais")
+
+# UFs
+uf_codigos <- c(
+  "12" = "Acre", "27" = "Alagoas", "13" = "Amazonas", "16" = "Amapá",
+  "29" = "Bahia", "23" = "Ceará", "53" = "Distrito Federal", "32" = "Espírito Santo",
+  "52" = "Goiás", "21" = "Maranhão", "51" = "Mato Grosso", "50" = "Mato Grosso do Sul",
+  "31" = "Minas Gerais", "15" = "Pará", "25" = "Paraíba", "41" = "Paraná",
+  "26" = "Pernambuco", "22" = "Piauí", "33" = "Rio de Janeiro", "24" = "Rio Grande do Norte",
+  "43" = "Rio Grande do Sul", "11" = "Rondônia", "14" = "Roraima", "42" = "Santa Catarina",
+  "35" = "São Paulo", "28" = "Sergipe", "17" = "Tocantins"
+)
+
+dados <- bind_rows(dados_2023, dados_2024, dados_atuais) %>%
+  mutate(
+    SEM_PRI = gsub("[^0-9]", "", SEM_PRI),  
+    SEM_PRI = str_pad(SEM_PRI, 6, pad="0"), 
+    sem_num = as.integer(SEM_PRI),
+    ano     = sem_num %/% 100,
+    semana  = sem_num %% 100
+  ) %>%
+  filter(!is.na(ano), !is.na(semana))
+
+dados <- dados %>%
+  filter(!(fonte == "atuais" & ano <= 2024))
+
+# Filtro = casos prováveis
+dados <- dados %>%
+  filter(!CLASSI_FIN %in% c("5", "5.0", "13", "13.0") | is.na(CLASSI_FIN))
+
+# Temporadas
+dados <- dados %>%
+  mutate(
+    temporada = case_when(
+      (ano == 2023 & semana >= 27) | (ano == 2024 & semana <= 26) ~ "2023/2024",
+      (ano == 2024 & semana >= 27) | (ano == 2025 & semana <= 26) ~ "2024/2025",
+      (ano == 2025 & semana >= 27) | (ano == 2026 & semana <= 26) ~ "2025/2026",
+      TRUE ~ NA_character_
+    ),
+    ordem_se = if_else(semana >= 27, semana - 26, semana + 26),
+    UF_nome  = uf_codigos[as.character(SG_UF)]
+  ) %>%
+  filter(!is.na(temporada))
+
+# Agregar
+dados_agg <- dados %>%
+  group_by(temporada, SG_UF, UF_nome, semana, ordem_se) %>%
+  summarise(casos = n(), .groups = "drop")
+
+
+# Cores
+cores_temporada <- c(
+  "2023/2024" = "steelblue",
+  "2024/2025" = "darkgreen",
+  "2025/2026" = "red"
+)
+
+# Função de gráfico
+plotar_grafico <- function(df, uf = NULL) {
+  titulo <- if (is.null(uf)) {
+    "Brasil"
+  } else {
+    first(na.omit(df$UF_nome[df$SG_UF == uf]))
+  }
+  
+  df_plot <- df %>%
+    group_by(temporada, ordem_se, semana) %>%
+    summarise(casos = sum(casos), .groups = "drop") %>%
+    arrange(temporada, ordem_se)
+  
+  labels_se <- df_plot %>%
+    distinct(ordem_se, semana) %>%
+    arrange(ordem_se)
+  
+  ggplot(df_plot, aes(x = ordem_se, y = casos, color = temporada, group = temporada)) +
+    geom_line(linewidth = 1) +
+    scale_color_manual(values = cores_temporada) +
+    scale_x_continuous(
+      breaks = labels_se$ordem_se,
+      labels = labels_se$semana,
+      expand = expansion(mult = c(0.01, 0.01))
+    ) +
+    scale_y_continuous(labels = scales::comma) +   # <<<<<< AQUI!
+    labs(
+      title = paste("Casos de Dengue -", titulo),
+      x = "Semana Epidemiológica",
+      y = "Número de Casos",
+      color = "Temporada"
+    ) +
+    theme_void() +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, size = 6)
+    )
+}
+
+
+# Pasta de saída
+dir.create("graficos_uf", showWarnings = FALSE)
+
+# Gráfico Brasil
+grafico_brasil <- dados_agg %>%
+  group_by(temporada, semana, ordem_se) %>%
+  summarise(casos = sum(casos), .groups = "drop") %>%
+  mutate(SG_UF = NA, UF_nome = "Brasil") %>%
+  plotar_grafico()
+
+ggsave(filename = file.path("graficos_uf", "grafico_dengue_Brasil.png"),
+       plot = grafico_brasil, width = 12, height = 6)
+
+# Gráficos por UF
+ufs <- unique(dados_agg$SG_UF)
+
+for (uf in ufs) {
+  p <- plotar_grafico(dados_agg %>% filter(SG_UF == uf), uf)
+  nome_uf <- unique(na.omit(dados_agg$UF_nome[dados_agg$SG_UF == uf]))
+  ggsave(filename = file.path("graficos_uf", paste0("grafico_dengue_", nome_uf, ".png")),
+         plot = p, width = 12, height = 6)
+}
