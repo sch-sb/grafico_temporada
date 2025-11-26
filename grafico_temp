@@ -107,19 +107,19 @@ plotar_grafico <- function(df, uf = NULL) {
       labels = labels_se$semana,
       expand = expansion(mult = c(0.01, 0.01))
     ) +
-    scale_y_continuous(labels = scales::comma) +   # <<<<<< AQUI!
+    scale_y_continuous(labels = scales::comma) +
     labs(
       title = paste("Casos de Dengue -", titulo),
       x = "Semana Epidemiológica",
       y = "Número de Casos",
       color = "Temporada"
     ) +
-    theme_void() +
+    theme_minimal() +                        
     theme(
       axis.text.x = element_text(angle = 90, hjust = 1, size = 6)
     )
-}
-
+  
+} 
 
 # Pasta de saída
 dir.create("graficos_uf", showWarnings = FALSE)
