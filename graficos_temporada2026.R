@@ -30,7 +30,7 @@ colunas_basicas <- c("DT_SIN_PRI", "SEM_PRI", "SG_UF", "CLASSI_FIN")
 dados_2023 <- ler_dados_dengue(file.path(pasta_historica, "DENGUE2023.csv"), colunas_basicas) %>%
   mutate(fonte = "hist_2023")
 
-dados_2024 <- ler_dados_dengue(file.path(pasta_historica, "DENGUE2024.csv"), colunas_basicas) %>%
+dados_2024 <- ler_dados_dengue(file.path(pasta_historica, "DENGUE2024_1.csv"), colunas_basicas) %>%
   mutate(fonte = "hist_2024")
 
 dados_2025 <- ler_dados_dengue(file.path(pasta_historica, "DENGUE2025.csv"), colunas_basicas) %>%
@@ -77,10 +77,7 @@ dados <- bind_rows(dados_2023, dados_2024, dados_2025, dados_atuais) %>%
     semana  = sem_num %% 100
   ) %>%
   filter(!is.na(ano), !is.na(semana)) %>%
-  # evita duplicidade com históricos:
-  # - históricos cobrem 2023–2025, então "atuais" só entra a partir de 2026
   filter(!(fonte == "atuais" & ano <= 2025)) %>%
-  # casos prováveis (remove descartados)
   filter(!CLASSI_FIN %in% c("5", "5.0", "13", "13.0") | is.na(CLASSI_FIN)) %>%
   mutate(
     temporada = case_when(
@@ -90,12 +87,12 @@ dados <- bind_rows(dados_2023, dados_2024, dados_2025, dados_atuais) %>%
       (ano == 2026 & semana >= 27) | (ano == 2027 & semana <= 26) ~ "2026/2027",
       TRUE ~ NA_character_
     ),
-    # eixo sazonal: 27..52 vira 1..26 e 1..26 vira 27..52 (ordem 1..52)
     ordem_se = if_else(semana >= 27, semana - 26, semana + 26),
     UF_nome  = uf_codigos[as.character(SG_UF)],
     regiao   = regiao_codigos[as.character(SG_UF)]
   ) %>%
-  filter(!is.na(temporada))
+  filter(!is.na(temporada)) %>%
+  filter(semana != 53)
 
 # Agregar por UF
 dados_agg <- dados %>%
